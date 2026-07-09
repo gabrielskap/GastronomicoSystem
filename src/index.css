@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+:root {
+  --brand-primary: #dc2626;
+  --brand-hover: color-mix(in srgb, var(--brand-primary) 85%, black);
+  --brand-bg: color-mix(in srgb, var(--brand-primary) 8%, white);
+  --brand-border: color-mix(in srgb, var(--brand-primary) 18%, white);
+  --brand-text: var(--brand-primary);
+}
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-serif: "Outfit", Georgia, serif;
+  
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-bg: var(--brand-bg);
+  --color-brand-border: var(--brand-border);
+  --color-brand-text: var(--brand-text);
+}
+
+/* Custom global rules for premium responsiveness and touch behaviors */
+body {
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Hide scrollbars for sliders but maintain native touch scrolling kinetics */
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Animation utilities for interactive events */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideLeft {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes scaleUp {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slide-left {
+  animation: slideLeft 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scale-up {
+  animation: scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+

@@ -1,0 +1,6 @@
+{
+  "name": "MenuMesa - Cardápio Digital",
+  "description": "Plataforma completa de cardápio digital para mesas, comanda digital, chamados de garçom, painel do caixa com divisão de contas, painel gerencial e tela de cozinha integrados em tempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

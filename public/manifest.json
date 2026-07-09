@@ -1,0 +1,24 @@
+{
+  "name": "MenuMesa - Cardápio Digital & PDV",
+  "short_name": "MenuMesa",
+  "description": "Plataforma completa de auto-atendimento, controle de mesas, cozinha e caixa integrados em tempo real.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#171717",
+  "theme_color": "#171717",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/color/192/000000/restaurant.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://img.icons8.com/color/512/000000/restaurant.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
