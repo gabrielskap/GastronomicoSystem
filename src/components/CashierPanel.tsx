@@ -42,6 +42,8 @@ export const CashierPanel: React.FC = () => {
     setOrders,
     updateTable,
     payAllOrdersOfTable,
+    registrarPagamentoCaixa,
+    taxaServicoPadrao,
     themeColor,
     isOnline
   } = useRestaurant();
@@ -127,7 +129,7 @@ export const CashierPanel: React.FC = () => {
     }
     // Clean up temporary billing forms when table changes
     setDiscountValue(0);
-    setServiceTaxPercent(10);
+    setServiceTaxPercent(taxaServicoPadrao);
     setSelectedIndividualItems({});
     setIndividualPaymentMode(false);
     setSplitModeEnabled(false);
@@ -369,7 +371,7 @@ export const CashierPanel: React.FC = () => {
         // Splitting evenly usually means deducting value proportionally OR paying it down.
         // Since we are paying 1 fraction, we can simulate subtracting the quantity or registering a custom partial discount,
         // but to make it strictly bulletproof, we can register that 1 fraction is paid.
-        // In our mock, if they pay the last remaining fraction, it closes the whole bill.
+        // Se pagarem a última fração restante, a conta inteira é encerrada.
         // Let's create an elegant fractional state: if they pay the last fraction, or if splitCount <= 1, pay full!
         if (splitCount <= 1) {
           // Pay everything
@@ -441,6 +443,23 @@ export const CashierPanel: React.FC = () => {
     // Set and trigger receipt display
     setGeneratedReceiptData(receiptData);
     setShowReceipt(true);
+
+    // Persistência no banco: registro financeiro + fechamento da conta quando aplicável
+    registrarPagamentoCaixa({
+      tableId: selectedTableId,
+      subtotal: receiptData.subtotal,
+      taxaServico: receiptData.serviceTax,
+      taxaServicoPercentual: receiptData.serviceTaxPercent,
+      desconto: receiptData.discount,
+      valorTotal: receiptData.total,
+      formaPagamento: paymentMethod,
+      valorRecebido: receiptData.received,
+      troco: receiptData.change,
+      quantidadePessoas: receiptData.peopleCount,
+      tipo: receiptData.type,
+      nomePagador: null,
+      fecharConta: tableOrdersWillAllBePaid,
+    });
 
     // Clean up inputs
     setSelectedIndividualItems({});

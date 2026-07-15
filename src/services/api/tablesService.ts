@@ -1,85 +1,68 @@
-import { supabase, isSupabaseConfigured, isValidUuid } from '../supabase';
-import { DbTable } from './types';
+import { supabase } from '../supabase';
+import { TB } from './tables';
+import { DbMesa, MesaStatusDb } from './types';
 
 /**
- * Busca a configuração de todas as mesas no restaurante.
- * @returns Lista de mesas seguindo a estrutura do banco de dados.
+ * Busca todas as mesas de uma unidade.
  */
-export async function fetchTables(restaurantId?: string): Promise<DbTable[]> {
-  if (isSupabaseConfigured) {
-    try {
-      if (restaurantId && !isValidUuid(restaurantId)) {
-        throw new Error('restaurantId is not a valid UUID');
-      }
-      let query = supabase.from('tables').select('*');
-      if (restaurantId) {
-        query = query.eq('restaurant_id', restaurantId);
-      }
-      const { data, error } = await query.order('number');
-      if (error) throw error;
-      if (data) {
-        return data as DbTable[];
-      }
-    } catch (err) {
-      console.warn('Supabase: Erro ao buscar mesas, usando dados mockados como fallback:', err);
-    }
+export async function fetchMesas(unidadeId: string): Promise<DbMesa[]> {
+  if (!unidadeId) return [];
+  const { data, error } = await supabase
+    .from(TB.mesas)
+    .select('*')
+    .eq('unidade_id', unidadeId)
+    .order('numero');
+  if (error) {
+    console.error('Supabase: erro ao buscar mesas:', error);
+    return [];
   }
-
-  // Fallback baseado no cache do localStorage do applet ou carregamento inicial de 12 mesas
-  const cached = localStorage.getItem('menumesa_tables_config');
-  let tablesListObj = [];
-  if (cached) {
-    try {
-      tablesListObj = JSON.parse(cached);
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  if (!tablesListObj || tablesListObj.length === 0) {
-    tablesListObj = Array.from({ length: 12 }, (_, i) => {
-      const tableId = String(i + 1).padStart(2, '0');
-      const initialPeople = tableId === '02' ? 4 : tableId === '05' ? 2 : tableId === '08' ? 0 : tableId === '09' ? 3 : tableId === '11' ? 2 : 0;
-      return {
-        id: tableId,
-        capacity: 4,
-        isActive: true,
-        peopleCount: initialPeople
-      };
-    });
-  }
-
-  return tablesListObj.map((t: any) => ({
-    id: t.id,
-    restaurant_id: restaurantId || '93dbba32-e3d1-4ba2-8bf8-d3fd3dbdcc01',
-    number: t.id,
-    capacity: t.capacity || 4,
-    people_count: t.peopleCount || 0,
-    status: t.peopleCount > 0 ? 'ocupada' : 'livre',
-    is_active: t.isActive !== undefined ? t.isActive : true,
-    created_at: new Date().toISOString()
-  }));
+  return (data || []) as DbMesa[];
 }
 
 /**
- * Atualiza o status de uma mesa no Supabase ou simula modificação.
+ * Cria uma nova mesa na unidade.
  */
-export async function updateTableStatus(tableId: string, status: DbTable['status'], peopleCount?: number): Promise<boolean> {
-  if (isSupabaseConfigured) {
-    try {
-      const updates: Partial<DbTable> = { status };
-      if (peopleCount !== undefined) {
-        updates.people_count = peopleCount;
-      }
-      const { error } = await supabase
-        .from('tables')
-        .update(updates)
-        .eq('number', tableId); // Ou id dependendo de como as tabelas são mapeadas
-      if (error) throw error;
-      return true;
-    } catch (err) {
-      console.warn('Supabase: Erro ao atualizar mesa:', err);
-    }
+export async function createMesa(
+  unidadeId: string,
+  numero: string,
+  capacidade: number
+): Promise<DbMesa | null> {
+  const { data, error } = await supabase
+    .from(TB.mesas)
+    .insert({ unidade_id: unidadeId, numero, capacidade })
+    .select()
+    .single();
+  if (error) {
+    console.error('Supabase: erro ao criar mesa:', error);
+    return null;
+  }
+  return data as DbMesa;
+}
+
+/**
+ * Atualiza campos de uma mesa (capacidade, pessoas, número, ativa, status).
+ */
+export async function updateMesa(
+  mesaId: string,
+  updates: Partial<Pick<DbMesa, 'capacidade' | 'quantidade_pessoas' | 'numero' | 'ativa' | 'status'>>
+): Promise<boolean> {
+  const { error } = await supabase.from(TB.mesas).update(updates).eq('id', mesaId);
+  if (error) {
+    console.error('Supabase: erro ao atualizar mesa:', error);
+    return false;
   }
   return true;
+}
+
+/**
+ * Atualiza o status (e opcionalmente a lotação) de uma mesa.
+ */
+export async function updateMesaStatus(
+  mesaId: string,
+  status: MesaStatusDb,
+  quantidadePessoas?: number
+): Promise<boolean> {
+  const updates: Partial<DbMesa> = { status };
+  if (quantidadePessoas !== undefined) updates.quantidade_pessoas = quantidadePessoas;
+  return updateMesa(mesaId, updates);
 }

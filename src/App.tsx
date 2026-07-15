@@ -5,10 +5,12 @@
 
 import React, { useState } from 'react';
 import { RestaurantProvider, useRestaurant } from './context/RestaurantContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { CustomerView } from './components/CustomerView';
 import { AdminPanel } from './components/AdminPanel';
 import { KitchenPanel } from './components/KitchenPanel';
 import { CashierPanel } from './components/CashierPanel';
+import { LoginScreen } from './components/LoginScreen';
 import { 
   Smartphone, 
   ChefHat, 
@@ -25,6 +27,12 @@ function NavigationManager() {
   const [currentView, setCurrentView] = useState<'customer' | 'admin' | 'kitchen' | 'cashier'>('customer');
   const [isMobileWrapperEnabled, setIsMobileWrapperEnabled] = useState(true);
   const { activeTable, calls, orders } = useRestaurant();
+  const { session, loading: authLoading } = useAuth();
+
+  // Painéis da equipe exigem autenticação (o RLS depende do usuário logado).
+  const painelLabels: Record<string, string> = { admin: 'Gerente', kitchen: 'Cozinha', cashier: 'Caixa' };
+  const requiresAuth = currentView === 'admin' || currentView === 'kitchen' || currentView === 'cashier';
+  const showLogin = requiresAuth && !authLoading && !session;
 
   // Badge alert counts for visual feedback
   const pendingCallsCount = calls.filter(c => c.status === 'pending').length;
@@ -123,7 +131,15 @@ function NavigationManager() {
 
       {/* CORE WORKSPACE CONSOLE */}
       <div className="flex-1 flex flex-col">
-        {currentView === 'customer' ? (
+        {showLogin ? (
+          <div className="flex-1 bg-neutral-100 animate-fade-in">
+            <LoginScreen painel={painelLabels[currentView]} />
+          </div>
+        ) : requiresAuth && authLoading ? (
+          <div className="flex-1 flex items-center justify-center bg-neutral-100 text-neutral-400 text-sm animate-pulse">
+            Verificando sessão...
+          </div>
+        ) : currentView === 'customer' ? (
           
           /* OPTIONAL SMARTPHONE CONTAINER SIMULATION ON WIDE SCREENS FOR DELIGHTFUL PRESENTATION */
           <div className="w-full h-full flex-1 md:bg-neutral-800 md:bg-[radial-gradient(#262626_1px,transparent_1px)] md:[background-size:16px_16px] flex flex-col items-center justify-start p-0 md:py-8 transition-all relative">
@@ -189,8 +205,10 @@ function NavigationManager() {
 
 export default function App() {
   return (
-    <RestaurantProvider>
-      <NavigationManager />
-    </RestaurantProvider>
+    <AuthProvider>
+      <RestaurantProvider>
+        <NavigationManager />
+      </RestaurantProvider>
+    </AuthProvider>
   );
 }

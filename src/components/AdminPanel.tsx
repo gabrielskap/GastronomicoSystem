@@ -6,8 +6,13 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { useRestaurant, THEME_COLOR_MAPS } from '../context/RestaurantContext';
+import { useAuth } from '../context/AuthContext';
+import {
+  fetchMovimentacoesCaixa, registrarMovimentacaoCaixa,
+  fetchUsuariosComPermissoes, fetchModulos, atualizarUsuario, salvarPermissoes, criarUsuarioEquipe,
+  definirEstoque,
+} from '../services/api';
 import { MenuItem, Order, OrderStatus, TableState, WaiterCall, WaiterCallReason } from '../types';
-import { EXTRA_ITEMS } from '../data/menuData';
 import { 
   TrendingUp, 
   Users, 
@@ -83,6 +88,7 @@ import {
 export const AdminPanel: React.FC = () => {
   const {
     menuItems,
+    menuAddons,
     orders,
     calls,
     tables,
@@ -100,8 +106,12 @@ export const AdminPanel: React.FC = () => {
     removeMenuItem,
     createTable,
     updateTable,
-    toggleTableActive
+    toggleTableActive,
+    unidadeId,
+    restauranteId
   } = useRestaurant();
+
+  const { profile: authProfile, permissoes: authPermissoes, hasPermission } = useAuth();
 
   const themeColors = THEME_COLOR_MAPS[themeColor] || THEME_COLOR_MAPS.red;
 
@@ -158,65 +168,27 @@ export const AdminPanel: React.FC = () => {
     balanceAfter: number;
   }
 
-  const [auditLogs, setAuditLogs] = useState<CashAuditLog[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('menumesa_cashier_audit_logs');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          // ignore
-        }
-      }
-    }
-    // Default initial logs representing today and yesterday
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
-    return [
-      {
-        id: 'LOG-1004',
-        type: 'suprimento',
-        timestamp: `${todayStr}T08:45:00.000Z`,
-        user: 'Carlos (Supervisor)',
-        amount: 150.00,
-        description: 'Aporte de moedas e notas baixas para troco matutino',
-        balanceAfter: 650.00
-      },
-      {
-        id: 'LOG-1003',
-        type: 'abertura',
-        timestamp: `${todayStr}T08:00:00.000Z`,
-        user: 'Gabriel (Gerente)',
-        amount: 500.00,
-        description: 'Abertura de caixa - Saldo base padrão em gaveta',
-        balanceAfter: 500.00
-      },
-      {
-        id: 'LOG-1002',
-        type: 'fechamento',
-        timestamp: '2026-07-08T23:30:00.000Z',
-        user: 'Mariana (Operadora)',
-        amount: 2840.50,
-        description: 'Fechamento de caixa noturno - Conciliado com sucesso',
-        balanceAfter: 0.00
-      },
-      {
-        id: 'LOG-1001',
-        type: 'sangria',
-        timestamp: '2026-07-08T19:15:00.000Z',
-        user: 'Gabriel (Gerente)',
-        amount: 1200.00,
-        description: 'Sangria de caixa - Recolhimento de excesso de cédulas para cofre',
-        balanceAfter: 1640.50
-      }
-    ];
-  });
+  const [auditLogs, setAuditLogs] = useState<CashAuditLog[]>([]);
 
+  // Carrega as movimentações de caixa reais da unidade (Gastronomico_caixa_movimentacoes)
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('menumesa_cashier_audit_logs', JSON.stringify(auditLogs));
-    }
-  }, [auditLogs]);
+    if (!unidadeId) return;
+    let active = true;
+    (async () => {
+      const movs = await fetchMovimentacoesCaixa(unidadeId);
+      if (!active) return;
+      setAuditLogs(movs.map((m) => ({
+        id: m.id,
+        type: m.tipo,
+        timestamp: m.registrado_em,
+        user: m.usuario_id === authProfile?.id ? (authProfile?.nome || '') : '',
+        amount: Number(m.valor),
+        description: m.descricao || '',
+        balanceAfter: Number(m.saldo_apos),
+      })));
+    })();
+    return () => { active = false; };
+  }, [unidadeId, authProfile?.id, authProfile?.nome]);
 
   // Audit log creation state
   const [isAddAuditLogOpen, setIsAddAuditLogOpen] = useState(false);
@@ -282,14 +254,18 @@ export const AdminPanel: React.FC = () => {
     });
   }, [auditLogs, auditLogFilterType, auditLogSearch]);
 
-  const handleAddAuditLog = (e: React.FormEvent) => {
+  const handleAddAuditLog = async (e: React.FormEvent) => {
     e.preventDefault();
     const amountNum = parseFloat(newAuditAmount);
     if (isNaN(amountNum) || amountNum < 0) {
       alert('Por favor, insira um valor válido e positivo.');
       return;
     }
-    
+    if (!unidadeId) {
+      alert('Unidade não identificada. Faça login novamente.');
+      return;
+    }
+
     let newBalance = cashMetrics.currentBalance;
     if (newAuditType === 'abertura') {
       newBalance = amountNum;
@@ -300,18 +276,29 @@ export const AdminPanel: React.FC = () => {
     } else if (newAuditType === 'sangria') {
       newBalance -= amountNum;
     }
-    
-    const newLog: CashAuditLog = {
-      id: `LOG-${Math.floor(1005 + Math.random() * 9000)}`,
-      type: newAuditType,
-      timestamp: new Date().toISOString(),
-      user: newAuditUser,
-      amount: amountNum,
-      description: newAuditDescription.trim() || `${newAuditType.toUpperCase()} de caixa manual`,
-      balanceAfter: Number(newBalance.toFixed(2))
-    };
-    
-    setAuditLogs([newLog, ...auditLogs]);
+    const saldoApos = Number(newBalance.toFixed(2));
+    const descricao = newAuditDescription.trim() || `${newAuditType.toUpperCase()} de caixa manual`;
+
+    const mov = await registrarMovimentacaoCaixa({
+      unidadeId,
+      tipo: newAuditType,
+      valor: amountNum,
+      descricao,
+      saldoApos,
+      usuarioId: authProfile?.id ?? null,
+    });
+
+    if (mov) {
+      setAuditLogs(prev => [{
+        id: mov.id,
+        type: mov.tipo,
+        timestamp: mov.registrado_em,
+        user: authProfile?.nome || newAuditUser,
+        amount: Number(mov.valor),
+        description: mov.descricao || descricao,
+        balanceAfter: Number(mov.saldo_apos),
+      }, ...prev]);
+    }
     setIsAddAuditLogOpen(false);
     
     setNewAuditAmount('');
@@ -468,7 +455,7 @@ export const AdminPanel: React.FC = () => {
   const [quickEditPrice, setQuickEditPrice] = useState<string>('');
   const [quickEditStock, setQuickEditStock] = useState<string>('');
 
-  // Preset image collections for ease of mock registration
+  // Preset image collections para cadastro rápido
   const PRESET_IMAGES = [
     { name: 'Smashed Burger', url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=600&q=80' },
     { name: 'French Fries', url: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=600&q=80' },
@@ -478,141 +465,52 @@ export const AdminPanel: React.FC = () => {
     { name: 'Sweet Dessert', url: 'https://images.unsplash.com/photo-1533134242443-d4fd215305ad?auto=format&fit=crop&w=600&q=80' }
   ];
 
-  // --- SYSTEM USERS & PERMISSIONS MODULE ---
-  const DEFAULT_USERS = [
-    {
-      id: 'usr-1',
-      name: 'Gabriel Gustavo',
-      role: 'Gerente',
-      color: 'bg-red-500 text-white',
-      cpf: '123.456.789-00',
-      birthDate: '1995-10-15',
-      phone: '(11) 98888-7777',
-      email: 'gabriel@barcrown.com',
-      password: 'gerente123',
-      permissions: {
-        dashboard: true,
-        cardapio: true,
-        estoque: true,
-        mesas: true,
-        pedidos: true,
-        cozinha: true,
-        caixa: true,
-        auditoria: true,
-        config: true,
-        usuarios: true
-      }
-    },
-    {
-      id: 'usr-2',
-      name: 'Mariana Costa',
-      role: 'Operadora',
-      color: 'bg-emerald-500 text-white',
-      cpf: '987.654.321-11',
-      birthDate: '1998-04-20',
-      phone: '(11) 97777-6666',
-      email: 'mariana@barcrown.com',
-      password: 'operadora123',
-      permissions: {
-        dashboard: false,
-        cardapio: true,
-        estoque: false,
-        mesas: true,
-        pedidos: true,
-        cozinha: true,
-        caixa: true,
-        auditoria: false,
-        config: false,
-        usuarios: false
-      }
-    },
-    {
-      id: 'usr-3',
-      name: 'Carlos Andrade',
-      role: 'Supervisor',
-      color: 'bg-amber-500 text-white',
-      cpf: '555.666.777-88',
-      birthDate: '1990-08-05',
-      phone: '(11) 96666-5555',
-      email: 'carlos@barcrown.com',
-      password: 'supervisor123',
-      permissions: {
-        dashboard: true,
-        cardapio: true,
-        estoque: true,
-        mesas: true,
-        pedidos: true,
-        cozinha: true,
-        caixa: true,
-        auditoria: true,
-        config: false,
-        usuarios: false
-      }
-    },
-    {
-      id: 'usr-4',
-      name: 'Juliana Silveira',
-      role: 'Mestre-Cervejeiro',
-      color: 'bg-indigo-500 text-white',
-      cpf: '444.333.222-11',
-      birthDate: '1993-12-25',
-      phone: '(11) 95555-4444',
-      email: 'juliana@barcrown.com',
-      password: 'mestre123',
-      permissions: {
-        dashboard: false,
-        cardapio: true,
-        estoque: true,
-        mesas: false,
-        pedidos: false,
-        cozinha: true,
-        caixa: false,
-        auditoria: false,
-        config: false,
-        usuarios: false
-      }
-    }
-  ];
+  // --- SYSTEM USERS & PERMISSIONS MODULE (dados reais do banco) ---
+  const PERM_KEYS = ['dashboard','cardapio','estoque','mesas','pedidos','cozinha','caixa','auditoria','config','usuarios'] as const;
 
-  const [systemUsers, setSystemUsers] = useState<any[]>(() => {
-    const saved = localStorage.getItem('crown_system_users');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Ensure legacy parsed users have the fields, otherwise mix defaults
-        return parsed.map((u: any, idx: number) => {
-          const def = DEFAULT_USERS.find(d => d.id === u.id) || DEFAULT_USERS[idx] || DEFAULT_USERS[0];
-          return {
-            cpf: def.cpf,
-            birthDate: def.birthDate,
-            phone: def.phone,
-            email: def.email,
-            password: def.password,
-            ...u
-          };
-        });
-      } catch (e) {
-        return DEFAULT_USERS;
-      }
-    }
-    return DEFAULT_USERS;
-  });
+  const mapDbUserToUi = (u: any, permissoes: Record<string, boolean>) => {
+    const permissions: Record<string, boolean> = {};
+    PERM_KEYS.forEach((k) => { permissions[k] = permissoes[k] === true; });
+    return {
+      id: u.id, name: u.nome, role: u.cargo,
+      color: u.cor_avatar || 'bg-neutral-500 text-white',
+      cpf: u.cpf || '', birthDate: u.data_nascimento || '', phone: u.telefone || '',
+      email: '', password: '', permissions,
+    };
+  };
 
-  const [currentUserId, setCurrentUserId] = useState<string>(() => {
-    return localStorage.getItem('crown_current_user_id') || 'usr-1';
-  });
+  const [systemUsers, setSystemUsers] = useState<any[]>([]);
+  const [modulos, setModulos] = useState<any[]>([]);
 
-  // Track changes to users list
-  useEffect(() => {
-    localStorage.setItem('crown_system_users', JSON.stringify(systemUsers));
-  }, [systemUsers]);
+  const carregarEquipe = React.useCallback(async () => {
+    if (!restauranteId) return;
+    const [lista, mods] = await Promise.all([
+      fetchUsuariosComPermissoes(restauranteId),
+      fetchModulos(),
+    ]);
+    setSystemUsers(lista.map(({ usuario, permissoes }) => mapDbUserToUi(usuario, permissoes)));
+    setModulos(mods);
+  }, [restauranteId]);
 
-  // Track changes to current active user
-  useEffect(() => {
-    localStorage.setItem('crown_current_user_id', currentUserId);
-  }, [currentUserId]);
+  useEffect(() => { carregarEquipe(); }, [carregarEquipe]);
 
-  const currentUser = systemUsers.find(u => u.id === currentUserId) || systemUsers[0] || DEFAULT_USERS[0];
+  // O usuário atual vem da sessão do Supabase Auth (sem troca manual).
+  const currentUserId = authProfile?.id || '';
+  const setCurrentUserId = (_id: string) => { /* substituído pela sessão do Auth */ };
+
+  const currentUserCompat = authProfile ? {
+    id: authProfile.id, name: authProfile.nome, role: authProfile.cargo,
+    color: authProfile.cor_avatar || 'bg-red-500 text-white',
+    cpf: authProfile.cpf || '', birthDate: authProfile.data_nascimento || '', phone: authProfile.telefone || '',
+    email: '', password: '',
+    permissions: Object.fromEntries(PERM_KEYS.map((k) => [k, authPermissoes[k] === true])) as Record<string, boolean>,
+  } : null;
+
+  const currentUser = systemUsers.find((u) => u.id === currentUserId) || currentUserCompat || systemUsers[0] || {
+    id: '', name: '—', role: '', color: 'bg-neutral-500 text-white',
+    cpf: '', birthDate: '', phone: '', email: '', password: '',
+    permissions: Object.fromEntries(PERM_KEYS.map((k) => [k, false])) as Record<string, boolean>,
+  };
 
   // Form states for creating/editing a user (Unified CRUD)
   const [showUserCrudModal, setShowUserCrudModal] = useState(false);
@@ -629,7 +527,7 @@ export const AdminPanel: React.FC = () => {
   const [userFormColor, setUserFormColor] = useState('bg-indigo-500 text-white');
 
   // Selected user to edit in the permissions tab
-  const [selectedPermissionsUserId, setSelectedPermissionsUserId] = useState<string>('usr-1');
+  const [selectedPermissionsUserId, setSelectedPermissionsUserId] = useState<string>('');
   const userToEditPermissions = systemUsers.find(u => u.id === selectedPermissionsUserId) || currentUser;
 
   // Dynamic search state inside Menu Tab
@@ -762,14 +660,9 @@ export const AdminPanel: React.FC = () => {
 
   // --- BEST SELLING PRODUCTS (Visão Geral - Produtos mais vendidos) ---
   const bestSellers = useMemo(() => {
-    const initialMockSales: Record<string, { name: string; category: string; count: number; totalSales: number; image: string }> = {
-      'burg-1': { name: 'Crown Smash Double Bacon', category: 'burgers', count: 48, totalSales: 48 * 46, image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=150&q=80' },
-      'ent-1': { name: 'Batatas Rústicas com Trufa & Parmesão', category: 'entradas', count: 35, totalSales: 35 * 36, image: 'https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=150&q=80' },
-      'beb-2': { name: 'Craft Beer IPA Imperial 450ml', category: 'bebidas', count: 28, totalSales: 28 * 24, image: 'https://images.unsplash.com/photo-1608270586620-248524c67de9?auto=format&fit=crop&w=150&q=80' },
-      'sob-1': { name: 'Cheesecake Desconstruída de Pistache', category: 'sobremesas', count: 22, totalSales: 22 * 34, image: 'https://images.unsplash.com/photo-1533134242443-d4fd215305ad?auto=format&fit=crop&w=150&q=80' },
-    };
+    // Derivado exclusivamente dos pedidos reais (sem dados mockados)
+    const vendasPorProduto: Record<string, { name: string; category: string; count: number; totalSales: number; image: string }> = {};
 
-    // Aggregate real orders dynamically to reflect actual customer usage
     orders.forEach(order => {
       order.items.forEach(item => {
         const itemId = item.menuItemId;
@@ -777,11 +670,11 @@ export const AdminPanel: React.FC = () => {
         const image = menuItem?.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=150&q=80';
         const category = menuItem?.category || 'burgers';
         
-        if (initialMockSales[itemId]) {
-          initialMockSales[itemId].count += item.quantity;
-          initialMockSales[itemId].totalSales += item.price * item.quantity;
+        if (vendasPorProduto[itemId]) {
+          vendasPorProduto[itemId].count += item.quantity;
+          vendasPorProduto[itemId].totalSales += item.price * item.quantity;
         } else {
-          initialMockSales[itemId] = {
+          vendasPorProduto[itemId] = {
             name: item.name,
             category,
             count: item.quantity,
@@ -792,21 +685,22 @@ export const AdminPanel: React.FC = () => {
       });
     });
 
-    return Object.values(initialMockSales)
+    return Object.values(vendasPorProduto)
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
   }, [orders, menuItems]);
 
   // --- ANALYTICAL SELECTORS FOR THE NEW DASHBOARD COMPONENT ---
   const categorySalesData = useMemo(() => {
-    const categoryTotals: Record<string, { category: string; name: string; value: number; revenue: number; color: string }> = {
-      'burgers': { category: 'burgers', name: 'Hambúrgueres', value: 48, revenue: 2208, color: '#ef4444' },
-      'entradas': { category: 'entradas', name: 'Entradas', value: 35, revenue: 1260, color: '#f97316' },
-      'bebidas': { category: 'bebidas', name: 'Bebidas', value: 28, revenue: 672, color: '#3b82f6' },
-      'sobremesas': { category: 'sobremesas', name: 'Sobremesas', value: 22, revenue: 748, color: '#8b5cf6' },
+    // Derivado exclusivamente dos pedidos reais (sem base mockada)
+    const paletaCategoria: Record<string, { name: string; color: string }> = {
+      burgers: { name: 'Hambúrgueres', color: '#ef4444' },
+      entradas: { name: 'Entradas', color: '#f97316' },
+      bebidas: { name: 'Bebidas', color: '#3b82f6' },
+      sobremesas: { name: 'Sobremesas', color: '#8b5cf6' },
     };
+    const categoryTotals: Record<string, { category: string; name: string; value: number; revenue: number; color: string }> = {};
 
-    // Calculate real sales dynamically to add to base
     orders.forEach(order => {
       order.items.forEach(item => {
         const menuItem = menuItems.find(m => m.id === item.menuItemId || m.name === item.name);
@@ -817,13 +711,13 @@ export const AdminPanel: React.FC = () => {
           categoryTotals[key].value += item.quantity;
           categoryTotals[key].revenue += item.price * item.quantity;
         } else {
-          const capitalizedLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
+          const meta = paletaCategoria[key];
           categoryTotals[key] = {
             category: cat,
-            name: capitalizedLabel,
+            name: meta?.name || (cat.charAt(0).toUpperCase() + cat.slice(1)),
             value: item.quantity,
             revenue: item.price * item.quantity,
-            color: '#10b981'
+            color: meta?.color || '#10b981'
           };
         }
       });
@@ -1100,6 +994,17 @@ export const AdminPanel: React.FC = () => {
       isAvailable: stockNum > 0 ? quickEditItem.isAvailable : false
     });
 
+    // Registra a movimentação no histórico de estoque quando o saldo muda
+    if (unidadeId && stockNum !== (quickEditItem.stock ?? 0)) {
+      definirEstoque({
+        unidadeId,
+        produto: { id: quickEditItem.id, estoque: quickEditItem.stock ?? 0 } as any,
+        novoSaldo: stockNum,
+        motivo: 'Ajuste manual via painel administrativo',
+        usuarioId: authProfile?.id ?? null,
+      });
+    }
+
     // Show custom visual success notification
     const snack = document.createElement('div');
     snack.className = 'fixed top-6 right-6 bg-amber-600 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs animate-bounce border border-amber-500';
@@ -1124,103 +1029,71 @@ export const AdminPanel: React.FC = () => {
     setProductToDelete(null);
   };
 
-  const handleUserCrudSubmit = (e: React.FormEvent) => {
+  const showSnack = (html: string, cls: string) => {
+    const snack = document.createElement('div');
+    snack.className = `fixed top-6 right-6 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border ${cls}`;
+    snack.innerHTML = html;
+    document.body.appendChild(snack);
+    setTimeout(() => snack.remove(), 3500);
+  };
+
+  const handleUserCrudSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userFormName.trim()) return;
 
     if (userCrudMode === 'create') {
-      const newUser = {
-        id: `usr-${Date.now()}`,
-        name: userFormName.trim(),
-        role: userFormRole,
-        color: userFormColor,
-        cpf: userFormCpf.trim(),
-        birthDate: userFormBirthDate,
-        phone: userFormPhone.trim(),
+      if (!restauranteId) { showSnack('⚠️ <span>Restaurante não identificado.</span>', 'bg-red-650 border-red-500'); return; }
+      const { error } = await criarUsuarioEquipe({
         email: userFormEmail.trim(),
-        password: userFormPassword,
-        permissions: {
-          dashboard: false,
-          cardapio: true,
-          estoque: false,
-          mesas: true,
-          pedidos: true,
-          cozinha: true,
-          caixa: false,
-          auditoria: false,
-          config: false,
-          usuarios: false
-        }
-      };
-
-      setSystemUsers(prev => [...prev, newUser]);
-
-      // Notify user creation
-      const snack = document.createElement('div');
-      snack.className = 'fixed top-6 right-6 bg-emerald-600 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border border-emerald-500';
-      snack.innerHTML = `🌟 <span>Novo operador <b>${newUser.name}</b> cadastrado com sucesso!</span>`;
-      document.body.appendChild(snack);
-      setTimeout(() => snack.remove(), 3500);
-
+        senha: userFormPassword,
+        nome: userFormName.trim(),
+        cargo: userFormRole,
+        restauranteId,
+        unidadeId: unidadeId,
+        cpf: userFormCpf.trim(),
+        telefone: userFormPhone.trim(),
+        permissoes: {
+          dashboard: false, cardapio: true, estoque: false, mesas: true, pedidos: true,
+          cozinha: true, caixa: false, auditoria: false, config: false, usuarios: false,
+        },
+      });
+      if (error) {
+        showSnack(`⚠️ <span>Falha ao criar (necessita a Edge Function "criar-usuario"): ${error}</span>`, 'bg-red-650 border-red-500');
+        return;
+      }
+      await carregarEquipe();
+      showSnack(`🌟 <span>Novo operador <b>${userFormName.trim()}</b> cadastrado com sucesso!</span>`, 'bg-emerald-600 border-emerald-500');
     } else {
-      // Edit mode
-      setSystemUsers(prev => prev.map(u => {
-        if (u.id === editingUserId) {
-          return {
-            ...u,
-            name: userFormName.trim(),
-            role: userFormRole,
-            color: userFormColor,
-            cpf: userFormCpf.trim(),
-            birthDate: userFormBirthDate,
-            phone: userFormPhone.trim(),
-            email: userFormEmail.trim(),
-            password: userFormPassword
-          };
-        }
-        return u;
-      }));
-
-      // Notify edit success
-      const snack = document.createElement('div');
-      snack.className = 'fixed top-6 right-6 bg-amber-600 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border border-amber-550';
-      snack.innerHTML = `📝 <span>Operador <b>${userFormName}</b> atualizado com sucesso!</span>`;
-      document.body.appendChild(snack);
-      setTimeout(() => snack.remove(), 3500);
+      if (editingUserId) {
+        await atualizarUsuario(editingUserId, {
+          nome: userFormName.trim(),
+          cargo: userFormRole,
+          cor_avatar: userFormColor,
+          cpf: userFormCpf.trim() || null,
+          telefone: userFormPhone.trim() || null,
+          data_nascimento: userFormBirthDate || null,
+        });
+        await carregarEquipe();
+      }
+      showSnack(`📝 <span>Operador <b>${userFormName}</b> atualizado com sucesso!</span>`, 'bg-amber-600 border-amber-550');
     }
 
     setShowUserCrudModal(false);
   };
 
-  const handleDeleteUser = (idToDelete: string) => {
-    if (idToDelete === 'usr-1') {
-      const snack = document.createElement('div');
-      snack.className = 'fixed top-6 right-6 bg-red-650 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border border-red-500';
-      snack.innerHTML = `⚠️ <span>Não é permitido excluir o Gerente Administrador Principal!</span>`;
-      document.body.appendChild(snack);
-      setTimeout(() => snack.remove(), 3500);
-      return;
-    }
+  const handleDeleteUser = async (idToDelete: string) => {
     if (idToDelete === currentUserId) {
-      const snack = document.createElement('div');
-      snack.className = 'fixed top-6 right-6 bg-red-650 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border border-red-500';
-      snack.innerHTML = `⚠️ <span>Não é permitido excluir o usuário da sessão ativa atual!</span>`;
-      document.body.appendChild(snack);
-      setTimeout(() => snack.remove(), 3500);
+      showSnack('⚠️ <span>Não é permitido excluir o usuário da sessão ativa atual!</span>', 'bg-red-650 border-red-500');
       return;
     }
 
     const uName = systemUsers.find(u => u.id === idToDelete)?.name || '';
+    // Desativa o colaborador (o vínculo com auth.users é preservado).
+    await atualizarUsuario(idToDelete, { ativo: false });
     setSystemUsers(prev => prev.filter(u => u.id !== idToDelete));
-    if (selectedPermissionsUserId === idToDelete) {
-      setSelectedPermissionsUserId('usr-1');
-    }
+    if (selectedPermissionsUserId === idToDelete) setSelectedPermissionsUserId('');
 
-    const snack = document.createElement('div');
-    snack.className = 'fixed top-6 right-6 bg-red-650 text-white px-5 py-3 rounded-xl shadow-xl z-50 flex items-center gap-2 font-bold text-xs border border-red-500';
-    snack.innerHTML = `🗑️ <span>Operador <b>${uName}</b> excluído com sucesso!</span>`;
-    document.body.appendChild(snack);
-    setTimeout(() => snack.remove(), 3500);
+    showSnack(`🗑️ <span>Operador <b>${uName}</b> desativado com sucesso!</span>`, 'bg-red-650 border-red-500');
   };
 
   // --- TABLE OPERATIONS EVENT HANDLERS ---
@@ -2163,7 +2036,7 @@ export const AdminPanel: React.FC = () => {
                             <div className="mt-2 text-[10px] text-neutral-400 font-medium pb-1 border-b border-neutral-50">
                               <span className="font-bold text-neutral-500">Adicionais: </span>
                               <span className="truncate block text-[10px] text-neutral-500">
-                                {item.availableExtras.map(id => EXTRA_ITEMS.find(e => e.id === id)?.name).filter(Boolean).join(', ')}
+                                {item.availableExtras.map(id => menuAddons.find(e => e.id === id)?.name).filter(Boolean).join(', ')}
                               </span>
                             </div>
                           )}
@@ -2563,7 +2436,7 @@ export const AdminPanel: React.FC = () => {
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-black uppercase text-neutral-500 block">Adicionais Disponíveis</label>
                         <div className="grid grid-cols-2 gap-2 bg-neutral-50 p-2.5 rounded-xl border border-neutral-200 max-h-32 overflow-y-auto">
-                          {EXTRA_ITEMS.map(extra => {
+                          {menuAddons.map(extra => {
                             const isChecked = newProductAvailableExtras.includes(extra.id);
                             return (
                               <label key={extra.id} className="flex items-center gap-2 text-[11px] font-semibold text-neutral-700 cursor-pointer p-1 rounded hover:bg-neutral-100 uppercase">
@@ -2909,7 +2782,7 @@ export const AdminPanel: React.FC = () => {
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-black uppercase text-neutral-500 block">Adicionais Disponíveis</label>
                         <div className="grid grid-cols-2 gap-2 bg-neutral-50 p-2.5 rounded-xl border border-neutral-200 max-h-32 overflow-y-auto">
-                          {EXTRA_ITEMS.map(extra => {
+                          {menuAddons.map(extra => {
                             const isChecked = editProductAvailableExtras.includes(extra.id);
                             return (
                               <label key={extra.id} className="flex items-center gap-2 text-[11px] font-semibold text-neutral-700 cursor-pointer p-1 rounded hover:bg-neutral-100 uppercase">
@@ -4301,10 +4174,10 @@ export const AdminPanel: React.FC = () => {
                         <div class="flex justify-between"><span>FAT. LÍQUIDO (PAGO):</span> <span>R$ ${totalPaidRevenue.toFixed(2)}</span></div>
                         <div class="flex justify-between"><span>MESA ATIVAS:</span> <span>${activeTablesCount}</span></div>
                       </div>
-                      <button id="close-print-mock" class="w-full mt-2 bg-neutral-900 text-white font-extrabold text-[11px] py-2 rounded-xl">Imprimir e Fechar Turno</button>
+                      <button id="close-print-turno" class="w-full mt-2 bg-neutral-900 text-white font-extrabold text-[11px] py-2 rounded-xl">Imprimir e Fechar Turno</button>
                     `;
                     document.body.appendChild(printBox);
-                    document.getElementById('close-print-mock')?.addEventListener('click', () => {
+                    document.getElementById('close-print-turno')?.addEventListener('click', () => {
                       printBox.remove();
                       // simulate closure alert
                       const closing = document.createElement('div');
@@ -4516,13 +4389,13 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 </div>
 
-                {/* RESTORE MOCK DATA SYSTEM CONTROL */}
+                {/* RECARREGAR DADOS DO BANCO */}
                 <div className="pt-5 border-t border-neutral-100 space-y-2">
-                  <h4 className="font-extrabold text-xs text-neutral-900 uppercase tracking-tight">Redefinição dos Simuladores</h4>
+                  <h4 className="font-extrabold text-xs text-neutral-900 uppercase tracking-tight">Recarregar dados</h4>
                   <p className="text-[11px] text-neutral-550 leading-relaxed">
-                    Clique no botão abaixo para restaurar as comandas, faturamento líquido e chamados de garçom para as configurações de fábrica originais da demonstração. Isso zera as tabelas contábeis.
+                    Recarrega os dados diretamente do banco de dados (cardápio, mesas, pedidos e chamados da unidade).
                   </p>
-                  
+
                   <button
                     onClick={() => {
                       window.location.reload();
@@ -4530,7 +4403,7 @@ export const AdminPanel: React.FC = () => {
                     className="flex items-center gap-1.5 bg-neutral-900 hover:bg-neutral-800 text-white font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    <span>Recarregar e Restaurar Mock Data</span>
+                    <span>Recarregar dados do banco</span>
                   </button>
                 </div>
 
@@ -5520,6 +5393,9 @@ export const AdminPanel: React.FC = () => {
                                     }
                                     return u;
                                   }));
+
+                                  // Persiste a permissão no banco (Gastronomico_usuario_permissoes)
+                                  salvarPermissoes(userToEditPermissions.id, { [item.key]: updatedChecked }, modulos);
 
                                   // notify
                                   const actionText = updatedChecked ? 'Habilitada ✅' : 'Revogada ❌';

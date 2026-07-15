@@ -6,7 +6,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useRestaurant, THEME_COLOR_MAPS } from '../context/RestaurantContext';
 import { MenuItem, CategoryType, WaiterCallReason } from '../types';
-import { EXTRA_ITEMS } from '../data/menuData';
 import { useApi, fetchFullMenu } from '../services/api';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -44,6 +43,7 @@ import {
 export const CustomerView: React.FC = () => {
   const {
     menuItems,
+    unidadeId,
     activeTable,
     cart,
     orders,
@@ -71,8 +71,11 @@ export const CustomerView: React.FC = () => {
 
   const themeColors = THEME_COLOR_MAPS[themeColor] || THEME_COLOR_MAPS.red;
 
-  // Load real menu structure from Supabase
-  const { data: menuData, loading: menuLoading, error: menuError, refetch: menuRefetch } = useApi(fetchFullMenu, []);
+  // Load real menu structure from Supabase (escopado pela unidade do tenant)
+  const { data: menuData, loading: menuLoading, error: menuError, refetch: menuRefetch } = useApi(
+    () => (unidadeId ? fetchFullMenu(unidadeId) : Promise.resolve({ categories: [], items: [], addons: [] })),
+    [unidadeId]
+  );
 
   const itemsToDisplay = useMemo(() => {
     // Sincroniza o cardápio com o estado reativo do contexto (AdminPanel edits de estoque e disponibilidade)
@@ -108,11 +111,11 @@ export const CustomerView: React.FC = () => {
   // Sincroniza participantes e comanda quando carregarem do banco (Context)
   useEffect(() => {
     if (activeComanda) {
-      setCustomerName(activeComanda.customer_name || 'Você');
+      setCustomerName(activeComanda.nome_cliente || 'Você');
       if (activeComandaParticipants.length > 0) {
-        setParticipants(activeComandaParticipants.map(p => p.name));
+        setParticipants(activeComandaParticipants.map(p => p.nome));
         setSelectedParticipant(prev => {
-          const names = activeComandaParticipants.map(p => p.name);
+          const names = activeComandaParticipants.map(p => p.nome);
           return names.includes(prev) ? prev : names[0];
         });
         setComandaType(activeComandaParticipants.length > 1 ? 'shared' : 'individual');
@@ -1910,7 +1913,7 @@ export const CustomerView: React.FC = () => {
                             <rect width="100" height="100" fill="white" />
                             {/* Pix Corners */}
                             <path d="M5,5 L25,5 L25,25 L5,25 Z M75,5 L95,5 L95,25 L75,25 Z M5,75 L25,75 L25,95 L5,95 Z" fill="currentColor" />
-                            {/* Inner Mock Boxes */}
+                            {/* Inner Boxes */}
                             <rect x="8" y="8" width="9" height="9" fill="white" />
                             <rect x="78" y="8" width="9" height="9" fill="white" />
                             <rect x="8" y="78" width="9" height="9" fill="white" />
